@@ -90,6 +90,7 @@ export function startManagementServer(startSync: () => boolean, getSyncStatus: (
     if (!authorised(req, password)) { res.writeHead(401, { 'WWW-Authenticate': 'Basic realm="TrueLayer sync"' }); return res.end() }
     if (req.method === 'GET' && req.url === '/') { res.writeHead(200, { 'Content-Type': 'text/html; charset=utf-8', 'Cache-Control': 'no-store' }); return res.end(page) }
     if (req.method === 'GET' && req.url === '/api/sync/status') return json(res, 200, getSyncStatus())
+    if (req.method === 'GET' && req.url === '/api/connections/list') { const { config } = await existingData(); return json(res, 200, { connections: config.connections.map(({ name, isCard }) => ({ name, isCard: Boolean(isCard) })) }) }
     try {
       if (req.method !== 'POST') return json(res, 404, { error: 'Not found' })
       const input = await body(req)
