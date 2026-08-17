@@ -125,8 +125,8 @@ export function startManagementServer(startSync: () => boolean, getSyncStatus: (
         const allActual = await actualAccounts(); const actualById = new Map(allActual.map((account) => [account.id, account.name])); const mapped = new Map(connection.accounts.map((account) => [account.trueLayerId, account]))
         const accounts: Array<{ id: string; label: string; actualId?: string; actualName?: string; available?: boolean }> = found.map((account) => ({ id: account.account_id, label: account.display_name, ...(mapped.has(account.account_id) ? { actualId: mapped.get(account.account_id)?.actualId, actualName: actualById.get(mapped.get(account.account_id)!.actualId) } : {}) }))
         for (const account of connection.accounts) if (!accounts.some((item) => item.id === account.trueLayerId)) accounts.push({ id: account.trueLayerId, label: account.friendlyName, actualId: account.actualId, actualName: actualById.get(account.actualId), available: false })
-        const usedElsewhere = new Set(config.connections.filter((item) => item.name !== name).flatMap((item) => item.accounts.map((account) => account.actualId)))
-        const availableActual = allActual.filter((account) => !usedElsewhere.has(account.id))
+        const usedActual = new Set(config.connections.flatMap((item) => item.accounts.map((account) => account.actualId)))
+        const availableActual = allActual.filter((account) => !usedActual.has(account.id))
         const session = randomUUID(); pendingConnections.set(session, { type: connection.isCard ? 'cards' : 'accounts', existingConnection: name, accounts: found.map((account) => ({ id: account.account_id, label: account.display_name })), actualAccounts: availableActual })
         return json(res, 200, { session, accounts, actualAccounts: availableActual })
       }
