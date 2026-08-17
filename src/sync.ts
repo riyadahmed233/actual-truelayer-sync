@@ -7,6 +7,7 @@ import type { Config } from './config/schema'
 import { startManagementServer } from './management'
 
 const dryRun = process.argv.includes('--dry-run')
+let activeSync: Promise<void> | undefined
 
 async function mainTask(): Promise<void> {
   try {
@@ -38,8 +39,16 @@ async function mainTask(): Promise<void> {
   }
 }
 
+function triggerSync(): Promise<boolean> {
+  if (activeSync) return Promise.resolve(false)
+  activeSync = mainTask().finally(() => {
+    activeSync = undefined
+  })
+  return activeSync.then(() => true)
+}
+
 void (async () => {
-  startManagementServer()
+  startManagementServer(triggerSync)
   let config: Config
   try {
     config = await loadConfig()
@@ -53,7 +62,7 @@ void (async () => {
     log(['DRY RUN'], 'No transactions will be imported and no runs will be scheduled.')
   }
 
-  await mainTask()
+  await triggerSync()
 
   if (dryRun) {
     if (config.env.CRON_SCHEDULE) {
@@ -71,7 +80,9 @@ void (async () => {
     cron.schedule(
       config.env.CRON_SCHEDULE,
       () => {
-        mainTask().catch((err) => logError(['Sync'], 'Unhandled task error:', err))
+        triggerSync().then((started) => {
+          if (!started) log(['Sync'], 'Scheduled sync skipped because a sync is already running.')
+        }).catch((err) => logError(['Sync'], 'Unhandled task error:', err))
       },
       {
         noOverlap: true,

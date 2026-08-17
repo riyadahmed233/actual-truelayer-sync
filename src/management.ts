@@ -22,6 +22,7 @@ type PendingConnection = {
   accounts: DiscoveredAccount[]
   actualAccounts: Array<{ id: string; name: string }>
 }
+type SyncTrigger = () => Promise<boolean>
 
 const pendingConnections = new Map<string, PendingConnection>()
 
@@ -97,7 +98,18 @@ async function actualAccounts(): Promise<Array<{ id: string; name: string }>> {
 
 const page = `<!doctype html><meta charset="utf-8"><title>TrueLayer onboarding</title><style>body{font:16px system-ui;max-width:760px;margin:40px auto;padding:0 16px}label,select,input,textarea,button{display:block;margin:8px 0}input,textarea,select{width:100%;box-sizing:border-box;padding:8px}textarea{height:80px}#accounts label{border:1px solid #ddd;padding:8px}#status{white-space:pre-wrap;color:#333}</style><h1>TrueLayer onboarding</h1><h2>Add a connection</h2><label>Connection type <select id="type"><option value="accounts">Bank accounts</option><option value="cards">Cards</option></select></label><label>Registered redirect URI <input id="redirect" value="https://console.truelayer.com/redirect-page"></label><button id="start">Start TrueLayer authorisation</button><div id="auth"></div><label>Paste the full redirect URL <textarea id="returned"></textarea></label><button id="complete">Discover accounts</button><h2>Add accounts to an existing connection</h2><label>Existing connection <select id="connection"><option value="">Loading connections...</option></select></label><button id="discover-existing">Discover unmapped accounts</button><div id="accounts"></div><label>Connection name <input id="name"></label><button id="save">Save selected mappings</button><p id="status"></p><script>let session,actual=[];const $=id=>document.getElementById(id),api=async(path,data={})=>{const r=await fetch(path,{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify(data)}),j=await r.json();if(!r.ok)throw Error(j.error||'Request failed');return j},show=j=>{session=j.session;actual=j.actualAccounts;$('accounts').innerHTML=j.accounts.map(a=>'<label><input type="checkbox" data-id="'+a.id+'"> '+a.label+' <select data-map="'+a.id+'"><option value="">Do not map</option>'+actual.map(x=>'<option value="'+x.id+'">'+x.name+'</option>').join('')+'</select></label>').join('')||'No unmapped TrueLayer accounts found.'};api('/api/connections/list').then(j=>{$('connection').innerHTML='<option value="">Choose connection</option>'+j.connections.map(x=>'<option value="'+x.name+'">'+x.name+'</option>').join('')}).catch(e=>{$('status').textContent=e.message});$('start').onclick=async()=>{try{const j=await api('/api/oauth/start',{type:$('type').value,redirectUri:$('redirect').value});$('auth').innerHTML='<a target="_blank" rel="noopener" href="'+j.url+'">Open TrueLayer authorisation</a>'}catch(e){$('status').textContent=e.message}};$('complete').onclick=async()=>{try{const j=await api('/api/oauth/complete',{type:$('type').value,redirectUri:$('redirect').value,redirectUrl:$('returned').value});$('name').value=j.suggestedName||'';show(j)}catch(e){$('status').textContent=e.message}};$('discover-existing').onclick=async()=>{try{const name=$('connection').value;if(!name)throw Error('Choose a connection');const j=await api('/api/connections/discover',{name});$('name').value=name;show(j)}catch(e){$('status').textContent=e.message}};$('save').onclick=async()=>{try{const mappings=[...document.querySelectorAll('#accounts input:checked')].map(x=>({trueLayerId:x.dataset.id,actualId:document.querySelector('[data-map="'+x.dataset.id+'"]').value})).filter(x=>x.actualId);const j=await api('/api/connections',{session,name:$('name').value,mappings});$('status').textContent='Saved '+j.name}catch(e){$('status').textContent=e.message}}</script>`
 
-export function startManagementServer(): void {
+function pageWithControls(): string {
+  return page
+    .replace('<title>TrueLayer onboarding</title>', '<title>TrueLayer sync</title>')
+    .replace('#accounts label{border:1px solid #ddd;padding:8px}', '#accounts label{border:1px solid #ddd;padding:8px}#accounts input[type="checkbox"]{display:none}.hint{color:#576071}')
+    .replace('<h1>TrueLayer onboarding</h1>', '<h1>TrueLayer sync</h1><p class="hint">Manage connections and account mappings for Actual Budget.</p><h2>Sync</h2><p class="hint">Run an import now. A running sync will not be duplicated.</p><button id="sync">Sync now</button>')
+    .replace('<h2>Add accounts to an existing connection</h2>', '<h2>Add accounts to an existing connection</h2><p class="hint">Find accounts that are not yet mapped. No re-authorisation is needed.</p>')
+    .replace('Save selected mappings', 'Save mappings')
+    .replace('Do not map</option>', 'Do not map this account</option>')
+    .replace('</script>', `;const originalShow=show;show=j=>{originalShow(j);document.querySelectorAll('[data-id]').forEach(input=>{input.checked=true})};$('sync').onclick=async()=>{const button=$('sync');button.disabled=true;try{const j=await api('/api/sync');$('status').textContent=j.completed?'Sync completed. Check logs for connection errors.':'A sync is already running.'}catch(e){$('status').textContent=e.message}finally{button.disabled=false}};</script>`)
+}
+
+export function startManagementServer(triggerSync: SyncTrigger): void {
   const port = process.env.MANAGEMENT_PORT
   if (!port) return
   const adminPassword = process.env.SYNC_ADMIN_PASSWORD
@@ -113,12 +125,16 @@ export function startManagementServer(): void {
     }
     if (req.method === 'GET' && req.url === '/') {
       res.writeHead(200, { 'Content-Type': 'text/html; charset=utf-8', 'Cache-Control': 'no-store' })
-      res.end(page)
+      res.end(pageWithControls())
       return
     }
     try {
       if (req.method !== 'POST') return json(res, 404, { error: 'Not found' })
       const input = await body(req)
+      if (req.url === '/api/sync') {
+        const started = await triggerSync()
+        return json(res, started ? 200 : 409, { completed: started, ...(started ? {} : { error: 'A sync is already running' }) })
+      }
       if (req.url === '/api/oauth/start') {
         const type = requireString(input, 'type') as ConnectionType
         const redirectUri = requireString(input, 'redirectUri')
