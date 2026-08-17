@@ -8,10 +8,22 @@ import { startManagementServer } from './management'
 
 const dryRun = process.argv.includes('--dry-run')
 let activeSync: Promise<void> | undefined
+type SyncStatus = {
+  running: boolean
+  startedAt?: string
+  finishedAt?: string
+  phase: string
+  connections: { total: number; completed: number; current?: string }
+  accounts: { total: number; completed: number; current?: string }
+  error?: string
+}
+let syncStatus: SyncStatus = { running: false, phase: 'Idle', connections: { total: 0, completed: 0 }, accounts: { total: 0, completed: 0 } }
 
 async function mainTask(): Promise<void> {
   try {
     const config: Config = await loadConfig()
+    syncStatus.connections.total = config.connections.length
+    syncStatus.accounts.total = config.connections.reduce((total, connection) => total + connection.accounts.length, 0)
     await withActualLock(async () => {
       try {
         await initActual({
@@ -22,11 +34,18 @@ async function mainTask(): Promise<void> {
         })
 
         for (const connection of config.connections) {
-          const result = await syncConnection(connection, config, dryRun)
+          syncStatus.connections.current = connection.name
+          syncStatus.phase = `Syncing ${connection.name}`
+          const result = await syncConnection(connection, config, dryRun, ({ phase, account, completed }) => {
+            syncStatus.phase = phase
+            syncStatus.accounts.current = account
+            if (completed) syncStatus.accounts.completed += 1
+          })
           if (result) {
             config.state.connections[connection.name] = result
             await writeState(config)
           }
+          syncStatus.connections.completed += 1
         }
       } finally {
         await shutdownActual()
@@ -34,21 +53,30 @@ async function mainTask(): Promise<void> {
     })
   } catch (e) {
     logError(['Sync'], 'Global sync error:', e)
+    syncStatus.error = 'Sync failed. Check the pod logs for details.'
   } finally {
+    syncStatus.running = false
+    syncStatus.finishedAt = new Date().toISOString()
+    syncStatus.phase = syncStatus.error ? 'Failed' : 'Completed'
     log(['Sync'], 'Sync cycle finished. Sleeping...')
   }
 }
 
-function triggerSync(): Promise<boolean> {
-  if (activeSync) return Promise.resolve(false)
+function triggerSync(): boolean {
+  if (activeSync) return false
+  syncStatus = { running: true, startedAt: new Date().toISOString(), phase: 'Preparing sync', connections: { total: 0, completed: 0 }, accounts: { total: 0, completed: 0 } }
   activeSync = mainTask().finally(() => {
     activeSync = undefined
   })
-  return activeSync.then(() => true)
+  return true
+}
+
+function getSyncStatus(): SyncStatus {
+  return syncStatus
 }
 
 void (async () => {
-  startManagementServer(triggerSync)
+  startManagementServer(triggerSync, getSyncStatus)
   let config: Config
   try {
     config = await loadConfig()
@@ -62,7 +90,7 @@ void (async () => {
     log(['DRY RUN'], 'No transactions will be imported and no runs will be scheduled.')
   }
 
-  await triggerSync()
+  if (triggerSync()) await activeSync
 
   if (dryRun) {
     if (config.env.CRON_SCHEDULE) {
@@ -80,9 +108,7 @@ void (async () => {
     cron.schedule(
       config.env.CRON_SCHEDULE,
       () => {
-        triggerSync().then((started) => {
-          if (!started) log(['Sync'], 'Scheduled sync skipped because a sync is already running.')
-        }).catch((err) => logError(['Sync'], 'Unhandled task error:', err))
+        if (!triggerSync()) log(['Sync'], 'Scheduled sync skipped because a sync is already running.')
       },
       {
         noOverlap: true,

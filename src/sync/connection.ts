@@ -7,10 +7,13 @@ import { getConnectionState, getAccountLastSyncDate } from '../config/state'
 import type { Connection, Config, ConnectionState } from '../config/schema'
 import type { TrueLayerAccount, TrueLayerCard } from '../truelayer/types'
 
+type Progress = (progress: { phase: string; account?: string; completed?: boolean }) => void
+
 export async function syncConnection(
   connection: Connection,
   config: Config,
   dryRun = false,
+  progress?: Progress,
 ): Promise<ConnectionState | undefined> {
   const connectionState = getConnectionState(config.state, connection.name)
   if (!connectionState) {
@@ -21,6 +24,7 @@ export async function syncConnection(
   const startedAt = Date.now()
   const prefix = [connection.name]
   log(prefix, 'Starting sync, authenticating with TrueLayer...')
+  progress?.({ phase: `Authenticating ${connection.name}` })
 
   let accessToken: string
   let newRefreshToken: string
@@ -42,6 +46,7 @@ export async function syncConnection(
 
   let trueLayerAccountsById: Map<string, TrueLayerAccount | TrueLayerCard>
   try {
+    progress?.({ phase: `Loading accounts for ${connection.name}` })
     trueLayerAccountsById = await fetchAccountMap(connection, accessToken)
   } catch (err) {
     logError(prefix, 'Sync failed:', err)
@@ -55,17 +60,23 @@ export async function syncConnection(
 
   const updatedAccounts = { ...connectionState.accounts }
   for (const configAccount of connection.accounts) {
+    progress?.({ phase: `Syncing ${configAccount.friendlyName}`, account: configAccount.friendlyName })
     const lastSyncDate = getAccountLastSyncDate(config.state, connection.name, configAccount.trueLayerId)
-    const hadTransactions = await syncAccount({
-      configAccount,
-      connection,
-      accessToken,
-      trueLayerAccountsById,
-      includeCategoryInNotes: config.includeCategoryInNotes,
-      lookbackDays: config.lookbackDays,
-      lastSyncDate,
-      dryRun,
-    })
+    let hadTransactions = false
+    try {
+      hadTransactions = await syncAccount({
+        configAccount,
+        connection,
+        accessToken,
+        trueLayerAccountsById,
+        includeCategoryInNotes: config.includeCategoryInNotes,
+        lookbackDays: config.lookbackDays,
+        lastSyncDate,
+        dryRun,
+      })
+    } finally {
+      progress?.({ phase: `Synced ${configAccount.friendlyName}`, account: configAccount.friendlyName, completed: true })
+    }
 
     if (hadTransactions) {
       updatedAccounts[configAccount.trueLayerId] = { lastSyncDate: currentDate() }
