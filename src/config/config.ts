@@ -4,8 +4,8 @@ import { log, logError } from '../utils/logger'
 import { Config, EnvSchema, FileConfig, FileConfigSchema, State, StateSchema } from './schema'
 import { readJSON, writeJSON } from '../utils/file'
 
-const CONFIG_PATH = path.resolve(__dirname, '..', '..', 'data', 'config.json')
-const STATE_PATH = path.resolve(__dirname, '..', '..', 'data', 'state.json')
+export const CONFIG_PATH = path.resolve(__dirname, '..', '..', 'data', 'config.json')
+export const STATE_PATH = path.resolve(__dirname, '..', '..', 'data', 'state.json')
 const CURRENT_CONFIG_VERSION = 2
 
 export async function loadConfig(): Promise<Config> {
@@ -53,4 +53,8 @@ export async function loadConfig(): Promise<Config> {
 export async function writeState(config: Config): Promise<void> {
   await writeJSON(STATE_PATH, config.state)
   log(['Config'], 'State saved.')
+}
+
+export async function writeConfig(config: FileConfig): Promise<void> {
+  await writeJSON(CONFIG_PATH, config)
 }

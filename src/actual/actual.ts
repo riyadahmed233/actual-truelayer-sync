@@ -1,5 +1,22 @@
 import actual from '@actual-app/api'
 
+let actualQueue: Promise<void> = Promise.resolve()
+
+// The Actual API client is process-global, so UI requests and sync runs cannot use it concurrently.
+export async function withActualLock<T>(task: () => Promise<T>): Promise<T> {
+  let release!: () => void
+  const previous = actualQueue
+  actualQueue = new Promise<void>((resolve) => {
+    release = resolve
+  })
+  await previous
+  try {
+    return await task()
+  } finally {
+    release()
+  }
+}
+
 interface InitOptions {
   serverURL: string
   password: string
