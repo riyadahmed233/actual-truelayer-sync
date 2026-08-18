@@ -1,4 +1,5 @@
 import actual from '@actual-app/api'
+import fs from 'fs/promises'
 
 let actualQueue: Promise<void> = Promise.resolve()
 
@@ -25,12 +26,14 @@ interface InitOptions {
 }
 
 export async function initActual(options: InitOptions): Promise<void> {
+  const dataDir = './data/actual-cache'
+  await fs.mkdir(dataDir, { recursive: true })
   await actual.init({
     serverURL: options.serverURL,
     password: options.password,
     verbose: options.verbose,
     // Keep Actual's downloaded budget cache separate from persistent config/state.
-    dataDir: './data/actual-cache',
+    dataDir,
   })
   await actual.downloadBudget(options.syncId)
 }
