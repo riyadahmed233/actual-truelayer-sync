@@ -29,7 +29,8 @@ export async function initActual(options: InitOptions): Promise<void> {
     serverURL: options.serverURL,
     password: options.password,
     verbose: options.verbose,
-    dataDir: './data',
+    // Keep Actual's downloaded budget cache separate from persistent config/state.
+    dataDir: './data/actual-cache',
   })
   await actual.downloadBudget(options.syncId)
 }
